@@ -34,7 +34,7 @@ tf.__version__, np.__version__
 # In[4]:
 
 
-path = '/home/noah/dev/Yolov8Pipeline/Datasets/Datacam Datasets/Employee Datasets/Cropped Identities_Scaled'
+path = 'Dataset'
 list_dirs = os.listdir(path)
 
 def create_generator_dataset(list_dirs, maxfiles = 250):

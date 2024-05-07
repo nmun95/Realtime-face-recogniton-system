@@ -6,7 +6,7 @@ import csv
 import cv2
 import numpy as np
 from scipy.special import softmax
-from tensorflow.keras.applications.resnet50 import preprocess_input
+from keras.applications.resnet50 import preprocess_input
 
 def get_images(detector, mode, path):
     if mode == '0':
@@ -52,14 +52,21 @@ def get_feature(feature_extractor, path):
 
 
 def add_new_person(name, detector, feature_extractor, mode = 0 ):
-    path = f'./Person/images/{name}'
-    os.mkdir(path)
-    get_images(detector, mode, path)
+    path = f'Person/images/{name}'
     
     feature = get_feature(feature_extractor, path)
     
     write_feature(feature)
     write_name(name)
+
+def euclidean_distance(vector1, vector2):
+    return np.sqrt(np.sum((vector1 - vector2) ** 2))
+
+def normalize_vector(vector):
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        return vector  # Avoid division by zero
+    return vector / norm
 
 def predict(feature, all_feature, label):
     '''
@@ -74,11 +81,18 @@ def predict(feature, all_feature, label):
     It then rounds this probability to two decimal places and returns it as 'acc'
     The function returns a tuple containing 'name' and 'acc'.
     '''
-    distances = np.sum(np.square(feature - all_feature), axis = 1)
+    # Normalize the feature vector
+    normalized_feature_vector = normalize_vector(feature)
+    
+    # Normalize each class feature vector
+    normalized_class_feature_vectors = [normalize_vector(class_vector) for class_vector in all_feature]
+    
+    # Compute distances
+    distances = [euclidean_distance(normalized_feature_vector, class_vector) for class_vector in normalized_class_feature_vectors]
     prob = 1 - softmax(distances)
     index = np.argmax(prob)
 
-    acc = np.around(np.max(prob), decimals = 2)
+    acc = acc = np.around(np.max(prob), decimals = 2)
     name = label[index]
     return name, acc
     
@@ -185,12 +199,12 @@ def show_atd(path):
 
 def recognition(detector, feature_extractor):
     
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture('/home/noah/dev/Yolov8Pipeline/Datasets/Datacam Datasets/Employee Datasets/1799_videos/20240119/Camera_3.avi')
     if not cap.isOpened():
         print("Cannot open camera")
         exit()
     path = get_path()
-    label = get_label('/home/dung/Project/Realtime_face_recognition/Person/name.txt')
+    label = get_label('Person/name.txt')
     attended_count = create_attended_count(label)
 
     while True:
@@ -198,44 +212,42 @@ def recognition(detector, feature_extractor):
         if not ret:
             print("Can't receive frame (stream end?). Exiting ...")
             break
-        detection = detector(image)
-        results = detection.pandas().xyxy[0].to_numpy()
-        for i in results:
-            if i[4] >= 0.6:
-                x_min = int(i[0])
-                x_max = int(i[2])
-                y_min = int(i[1])
-                y_max = int(i[3])
-                img = image[y_min:y_max, x_min:x_max]
-                img = cv2.resize(img, (125, 150))
-                img_exp = np.expand_dims(img, axis = 0)
-                feature = feature_extractor.predict(img_exp)
+        detections = detector.predict(image, imgsz=640, conf=0.72, iou=0.4)
+        for detection in detections:
+            if(len(detection.boxes) > 0):
+                for det in range(len(detection.boxes)):
+                    if (detection.boxes.cls.cpu().numpy()[det] == 0):
+                        x_min = int(detection.boxes.xyxy.data[det].cpu().numpy()[0])
+                        x_max = int(detection.boxes.xyxy.data[det].cpu().numpy()[2])
+                        y_min = int(detection.boxes.xyxy.data[det].cpu().numpy()[1])
+                        y_max = int(detection.boxes.xyxy.data[det].cpu().numpy()[3])
+                        img = image[y_min:y_max, x_min:x_max]
+                        img = cv2.resize(img, (128, 128))
+                        img_exp = np.expand_dims(img, axis = 0)
+                        feature = feature_extractor(img_exp)
 
-                label = get_label('./Person/name.txt')
-                feature_array = get_feature_array('./Person/feature.csv')
-                name, acc = predict(feature, feature_array, label)
-                label = name
-                # process
-                if acc > 0.85:
-                    attended_count[name] +=1
-                    if attended_count[name] > 20:
+                        label = get_label('Person/name.txt')
+                        feature_array = get_feature_array('Person/feature.csv')
+                        name, acc = predict(feature, feature_array, label)
+                        label = name
+                        # process
+                        if acc > 0.70:
+                            label = str(name)
+                            image = cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 1)
+                            image = cv2.putText(image, f'{label}', (x_min, y_min), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
+                        else:
+                            label = 'Unknown'
+                            image = cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 1)
+                            image = cv2.putText(image, f'{label}', (x_min, y_min), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
                         
-                        label = 'Completed Attendance'
-                    image = cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 1)
-                    image = cv2.putText(image, f'{label}', (x_min, y_min), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
-                else:
-                    label = 'Unknown'
-                    image = cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 1)
-                    image = cv2.putText(image, f'{label}', (x_min, y_min), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
-                
 
-                if attended_count[name] == 20:
-                    number = get_number(f'{path}/attended_table.csv')
-                    update(f'{path}/attended_table.csv', name, number)
-                    cv2.imwrite(f'{path}/Attended_images/{name}.jpg',img)
-                
-            else:
-                continue
+                        if attended_count[name] == 20:
+                            number = get_number(f'{path}/attended_table.csv')
+                            update(f'{path}/attended_table.csv', name, number)
+                            cv2.imwrite(f'{path}/Attended_images/{name}.jpg',img)
+                        
+                    else:
+                        continue
         cv2.imshow('Recognition - Enter q to exit', image)
             
         if cv2.waitKey(1) == ord('q'):
